@@ -1,39 +1,59 @@
+import fetch from "node-fetch";
+
 export default async function handler(req, res) {
   try {
-    const url = req.query.url;
+    const { url } = req.query;
 
     if (!url) {
       return res.status(400).json({
         status: false,
-        message: "No TikTok URL provided"
+        message: "No URL provided",
       });
     }
 
-    // Call TikWM API
+    // Fetch TikTok data from TikWM
     const api = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
-    const data = await api.json();
+    const json = await api.json();
 
-    if (!data || !data.data) {
-      return res.status(500).json({
+    if (!json.data) {
+      return res.status(404).json({
         status: false,
-        message: "Failed to fetch video"
+        message: "Video not found",
       });
     }
 
-    return res.status(200).json({
-      status: true,
-      video_url: data.data.play,
-      audio_url: data.data.music,
-      thumbnail: data.data.cover,
-      title: data.data.title,
-      author: data.data.author.nickname,
-      duration: data.data.duration
-    });
+    const videoUrl = json.data.play;
+    const audioUrl = json.data.music;
+    const thumbnail = json.data.cover;
+    const title = json.data.title;
+    const author = json.data.author.nickname;
+    const duration = json.data.duration;
+    const region = json.data.region;
 
+    // Get video size in MB
+    const headResp = await fetch(videoUrl, { method: "HEAD" });
+    const sizeBytes = headResp.headers.get("content-length");
+    const sizeMB = sizeBytes ? (parseInt(sizeBytes) / (1024 * 1024)).toFixed(2) : "Unknown";
+
+    // Determine quality (TikTok usually serves HD as 720p+)
+    const quality = json.data.video_resolution >= 720 ? "HD" : "SD";
+
+    res.status(200).json({
+      status: true,
+      video_url: videoUrl,
+      audio_url: audioUrl,
+      thumbnail: thumbnail,
+      title: title,
+      author: author,
+      duration: duration,
+      region: region,
+      size_mb: sizeMB,
+      quality: quality
+    });
   } catch (e) {
-    return res.status(500).json({
+    res.status(500).json({
       status: false,
-      message: e.toString()
+      error: e.toString(),
     });
   }
 }
