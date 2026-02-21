@@ -1,3 +1,5 @@
+import chromium from "@sparticuz/chromium";
+import puppeteer from "puppeteer-core";
 import fetch from "node-fetch";
 
 export default async function handler(req, res) {
@@ -7,53 +9,79 @@ export default async function handler(req, res) {
     if (!url) {
       return res.status(400).json({
         status: false,
-        message: "No URL provided",
+        message: "No TikTok URL provided"
       });
     }
 
-    // Fetch TikTok data from TikWM
-    const api = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
-    const json = await api.json();
+    // Launch browser
+    const browser = await puppeteer.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(),
+      headless: true
+    });
 
-    if (!json.data) {
-      return res.status(404).json({
+    const page = await browser.newPage();
+
+    await page.goto(url, {
+      waitUntil: "networkidle2",
+      timeout: 60000
+    });
+
+    // Extract video data
+    const data = await page.evaluate(() => {
+      const scripts = document.querySelectorAll("script");
+
+      for (let script of scripts) {
+        if (script.innerHTML.includes("playAddr")) {
+          const json = script.innerHTML;
+          const match = json.match(/"playAddr":"(.*?)"/);
+
+          if (match) {
+            return {
+              video_url: match[1].replace(/\\u0026/g, "&"),
+              thumbnail: document.querySelector("video")?.poster || "",
+              title: document.title || ""
+            };
+          }
+        }
+      }
+
+      return null;
+    });
+
+    await browser.close();
+
+    if (!data || !data.video_url) {
+      return res.status(500).json({
         status: false,
-        message: "Video not found",
+        message: "Failed to fetch video"
       });
     }
 
-    const videoUrl = json.data.play;
-    const audioUrl = json.data.music;
-    const thumbnail = json.data.cover;
-    const title = json.data.title;
-    const author = json.data.author.nickname;
-    const duration = json.data.duration;
-    const region = json.data.region;
+    // Get video size
+    const head = await fetch(data.video_url, { method: "HEAD" });
+    const bytes = head.headers.get("content-length");
 
-    // Get video size in MB
-    const headResp = await fetch(videoUrl, { method: "HEAD" });
-    const sizeBytes = headResp.headers.get("content-length");
-    const sizeMB = sizeBytes ? (parseInt(sizeBytes) / (1024 * 1024)).toFixed(2) : "Unknown";
+    const sizeMB = bytes
+      ? (parseInt(bytes) / (1024 * 1024)).toFixed(2)
+      : "Unknown";
 
-    // Determine quality (TikTok usually serves HD as 720p+)
-    const quality = json.data.video_resolution >= 720 ? "HD" : "SD";
+    // Determine quality
+    const quality = sizeMB > 10 ? "HD" : "SD";
 
-    res.status(200).json({
+    res.json({
       status: true,
-      video_url: videoUrl,
-      audio_url: audioUrl,
-      thumbnail: thumbnail,
-      title: title,
-      author: author,
-      duration: duration,
-      region: region,
+      video_url: data.video_url,
+      thumbnail: data.thumbnail,
+      title: data.title,
       size_mb: sizeMB,
       quality: quality
     });
-  } catch (e) {
+
+  } catch (error) {
     res.status(500).json({
       status: false,
-      error: e.toString(),
+      message: error.toString()
     });
   }
 }
