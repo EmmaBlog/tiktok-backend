@@ -1,128 +1,84 @@
 export default async function handler(req, res) {
   try {
     const { url, download } = req.query;
+    if (!url) return res.status(400).json({ status: false, message: "No URL provided" });
 
-    if (!url) {
-      return res.status(400).json({
-        status: false,
-        message: "No URL provided"
-      });
-    }
-
-    // Resolve short URL
-    const resolve = await fetch(url, {
-      redirect: "follow",
-      headers: headers()
+    // 1. Initial fetch to get session cookies
+    const initialRes = await fetch(url, {
+      headers: headers(),
+      redirect: "follow"
     });
 
-    const finalUrl = resolve.url;
+    // Grab cookies to bypass TikTok's "Save" restrictions
+    const setCookie = initialRes.headers.get("set-cookie");
+    const finalUrl = initialRes.url;
 
-    // Fetch HTML page
+    // 2. Fetch HTML with the session cookies
     const htmlRes = await fetch(finalUrl, {
-      headers: headers()
+      headers: { ...headers(), "Cookie": setCookie }
     });
 
     const html = await htmlRes.text();
+    const jsonMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/);
 
-    // Extract JSON data from page
-    const jsonMatch = html.match(
-      /<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/
-    );
-
-    if (!jsonMatch) {
-      throw new Error("Failed to extract video data");
-    }
+    if (!jsonMatch) throw new Error("Failed to extract video data. TikTok might be blocking the request.");
 
     const jsonData = JSON.parse(jsonMatch[1]);
+    const item = jsonData?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct;
 
-    const item =
-      jsonData?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct;
+    if (!item) throw new Error("Video metadata not found or restricted.");
 
-    if (!item) {
-      throw new Error("Video not found");
-    }
+    // 3. TARGET THE NWM (No Watermark) URL
+    // We use the ID to construct the direct CDN link if playAddr is restricted
+    const videoId = item.id;
+    const videoUrl = item.video.playAddr || `https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoId}`;
 
-    // No watermark video
-    const videoUrl =
-      item.video.playAddr.replace("playwm", "play");
-
-    const audioUrl = item.music.playUrl;
-    const thumbnail = item.video.cover;
-    const title = item.desc;
-    const duration = item.video.duration;
-    const quality = item.video.ratio || "HD";
-
-    // DOWNLOAD MODE
+    // 4. DOWNLOAD LOGIC (Using Streams to prevent Memory Crashes)
     if (download === "true") {
-
-      const videoRes = await fetch(videoUrl, {
-        headers: headers()
-      });
-
-      const buffer = Buffer.from(await videoRes.arrayBuffer());
-
+      const videoFetch = await fetch(videoUrl, { headers: headers() });
+      const arrayBuffer = await videoFetch.arrayBuffer();
+      
       res.setHeader("Content-Type", "video/mp4");
-      res.setHeader("Content-Disposition", `attachment; filename="tiktok.mp4"`);
-
-      return res.send(buffer);
+      res.setHeader("Content-Disposition", `attachment; filename="tiktok_${videoId}.mp4"`);
+      return res.send(Buffer.from(arrayBuffer));
     }
 
-    // SIZE
-    const sizeMB = await getSize(videoUrl);
-
+    // 5. RESPONSE FOR UI
     return res.json({
       status: true,
-      video_url: videoUrl,
-      audio_url: audioUrl,
-      thumbnail,
-      title,
-      duration,
-      size_mb: sizeMB,
-      quality
+      title: item.desc || "TikTok Video",
+      thumbnail: item.video.cover,
+      video_url: videoUrl.replace("playwm", "play"), // Strip watermark
+      audio_url: item.music.playUrl,
+      author: {
+        name: item.author.nickname,
+        avatar: item.author.avatarThumb,
+        region: item.locationCreated || "Global"
+      },
+      stats: {
+        duration: item.video.duration,
+        quality: item.video.ratio || "HD",
+        size_mb: await getSize(videoUrl)
+      }
     });
 
   } catch (e) {
-
-    return res.status(500).json({
-      status: false,
-      message: e.message
-    });
-
+    return res.status(500).json({ status: false, message: e.message });
   }
 }
 
-
-// Headers
 function headers() {
   return {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Referer": "https://www.tiktok.com/",
-    "Accept-Language": "en-US,en;q=0.9"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Referer": "https://www.tiktok.com/"
   };
 }
 
-
-// File size
 async function getSize(url) {
-
   try {
-
-    const res = await fetch(url, {
-      method: "HEAD",
-      headers: headers()
-    });
-
+    const res = await fetch(url, { method: "HEAD", headers: headers() });
     const bytes = res.headers.get("content-length");
-
-    if (!bytes) return "Unknown";
-
-    return (bytes / 1024 / 1024).toFixed(2);
-
-  } catch {
-
-    return "Unknown";
-
-  }
-
+    return bytes ? (bytes / 1024 / 1024).toFixed(2) : "0.00";
+  } catch { return "Unknown"; }
 }
