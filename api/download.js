@@ -1,6 +1,6 @@
 export default async function handler(req, res) {
   try {
-    const { url, download } = req.query;
+    const { url, download, index } = req.query;
 
     if (!url) {
       return res.status(400).json({
@@ -9,7 +9,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Resolve shortened URLs like vm.tiktok.com
+    // Resolve shortened links
     const resolve = await fetch(url, {
       redirect: "follow",
       headers: browserHeaders()
@@ -28,7 +28,7 @@ export default async function handler(req, res) {
 
     const videoId = idMatch[1];
 
-    // Call TikTok internal API
+    // Call TikTok API
     const apiUrl = `https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoId}`;
 
     const apiRes = await fetch(apiUrl, {
@@ -40,23 +40,73 @@ export default async function handler(req, res) {
     });
 
     const apiData = await apiRes.json();
-
     const item = apiData.aweme_list?.[0];
 
     if (!item) {
-      throw new Error("Video not found");
+      throw new Error("Post not found");
     }
+
+    const title = item.desc || "TikTok Post";
+
+    // =========================
+    // IMAGE POST
+    // =========================
+    if (item.image_post_info) {
+
+      const images = item.image_post_info.images.map(img => ({
+        url: img.display_image.url_list[0],
+        width: img.display_image.width,
+        height: img.display_image.height
+      }));
+
+      // DOWNLOAD specific image
+      if (download === "true") {
+
+        const i = parseInt(index || "0");
+
+        if (!images[i]) {
+          return res.status(400).json({
+            status: false,
+            message: "Invalid image index"
+          });
+        }
+
+        const imageRes = await fetch(images[i].url);
+        const buffer = await imageRes.arrayBuffer();
+
+        res.setHeader("Content-Type", "image/jpeg");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="tiktok_${videoId}_${i}.jpg"`
+        );
+
+        return res.send(Buffer.from(buffer));
+      }
+
+      // JSON response for images
+      return res.json({
+        status: true,
+        type: "image",
+        title,
+        total_images: images.length,
+        images,
+        author: {
+          name: item.author.nickname,
+          avatar: item.author.avatar_thumb.url_list[0]
+        }
+      });
+    }
+
+    // =========================
+    // VIDEO POST
+    // =========================
 
     const videoUrl =
       item.video.play_addr.url_list[0].replace("playwm", "play");
 
-    const title = item.desc || "TikTok Video";
-    const thumbnail = item.video.cover.url_list[0];
-
-    // DOWNLOAD MODE
     if (download === "true") {
-      const videoRes = await fetch(videoUrl);
 
+      const videoRes = await fetch(videoUrl);
       const buffer = await videoRes.arrayBuffer();
 
       res.setHeader("Content-Type", "video/mp4");
@@ -68,11 +118,11 @@ export default async function handler(req, res) {
       return res.send(Buffer.from(buffer));
     }
 
-    // JSON MODE
     return res.json({
       status: true,
+      type: "video",
       title,
-      thumbnail,
+      thumbnail: item.video.cover.url_list[0],
       video_url: videoUrl,
       audio_url: item.music.play_url.url_list[0],
       author: {
@@ -96,7 +146,7 @@ export default async function handler(req, res) {
 }
 
 
-// Browser headers
+// Headers
 function browserHeaders() {
   return {
     "User-Agent":
