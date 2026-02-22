@@ -1,87 +1,110 @@
-import chromium from "@sparticuz/chromium";
-import puppeteer from "puppeteer-core";
 import fetch from "node-fetch";
 
 export default async function handler(req, res) {
+
   try {
+
     const { url } = req.query;
 
     if (!url) {
-      return res.status(400).json({
+      return res.json({
         status: false,
-        message: "No TikTok URL provided"
+        message: "No URL provided"
       });
     }
 
-    // Launch browser
-    const browser = await puppeteer.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true
+    // Resolve short URL
+    const resolve = await fetch(url, {
+      redirect: "follow"
     });
 
-    const page = await browser.newPage();
+    const finalUrl = resolve.url;
 
-    await page.goto(url, {
-      waitUntil: "networkidle2",
-      timeout: 60000
-    });
+    // Extract video ID
+    const idMatch = finalUrl.match(/video\/(\d+)/);
 
-    // Extract video data
-    const data = await page.evaluate(() => {
-      const scripts = document.querySelectorAll("script");
+    if (!idMatch) {
+      return res.json({
+        status: false,
+        message: "Invalid TikTok URL"
+      });
+    }
 
-      for (let script of scripts) {
-        if (script.innerHTML.includes("playAddr")) {
-          const json = script.innerHTML;
-          const match = json.match(/"playAddr":"(.*?)"/);
+    const videoID = idMatch[1];
 
-          if (match) {
-            return {
-              video_url: match[1].replace(/\\u0026/g, "&"),
-              thumbnail: document.querySelector("video")?.poster || "",
-              title: document.title || ""
-            };
-          }
-        }
+    // TikTok internal API
+    const apiUrl =
+      `https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoID}`;
+
+    const response = await fetch(apiUrl, {
+      headers: {
+        "User-Agent":
+          "com.ss.android.ugc.trill/494+ (Linux; U; Android 10)"
       }
-
-      return null;
     });
 
-    await browser.close();
+    const json = await response.json();
 
-    if (!data || !data.video_url) {
-      return res.status(500).json({
+    if (!json.aweme_list || json.aweme_list.length === 0) {
+      return res.json({
         status: false,
-        message: "Failed to fetch video"
+        message: "Video not found"
       });
     }
 
-    // Get video size
-    const head = await fetch(data.video_url, { method: "HEAD" });
+    const video = json.aweme_list[0];
+
+    const videoUrl =
+      video.video.play_addr.url_list[0];
+
+    const audioUrl =
+      video.music.play_url.url_list[0];
+
+    const thumbnail =
+      video.video.cover.url_list[0];
+
+    const title =
+      video.desc;
+
+    const author =
+      video.author.nickname;
+
+    const duration =
+      video.video.duration / 1000;
+
+    // Get size
+    const head = await fetch(videoUrl, { method: "HEAD" });
+
     const bytes = head.headers.get("content-length");
 
     const sizeMB = bytes
-      ? (parseInt(bytes) / (1024 * 1024)).toFixed(2)
+      ? (bytes / 1024 / 1024).toFixed(2)
       : "Unknown";
 
-    // Determine quality
-    const quality = sizeMB > 10 ? "HD" : "SD";
+    const quality =
+      video.video.ratio === "720p"
+        ? "HD"
+        : "SD";
 
     res.json({
       status: true,
-      video_url: data.video_url,
-      thumbnail: data.thumbnail,
-      title: data.title,
+      video_url: videoUrl,
+      audio_url: audioUrl,
+      thumbnail: thumbnail,
+      title: title,
+      author: author,
+      duration: duration,
       size_mb: sizeMB,
       quality: quality
     });
 
-  } catch (error) {
-    res.status(500).json({
+  } catch (e) {
+
+    res.json({
       status: false,
-      message: error.toString()
+      message: e.toString()
     });
+
   }
+
 }
