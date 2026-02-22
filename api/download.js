@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 export default async function handler(req, res) {
 
   try {
@@ -13,7 +11,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Resolve short URL
+    // Resolve shortened URL
     const resolve = await fetch(url, {
       redirect: "follow"
     });
@@ -21,70 +19,65 @@ export default async function handler(req, res) {
     const finalUrl = resolve.url;
 
     // Extract video ID
-    const idMatch = finalUrl.match(/video\/(\d+)/);
+    const match = finalUrl.match(/video\/(\d+)/);
 
-    if (!idMatch) {
+    if (!match) {
       return res.json({
         status: false,
         message: "Invalid TikTok URL"
       });
     }
 
-    const videoID = idMatch[1];
+    const videoID = match[1];
 
-    // TikTok internal API
-    const apiUrl =
-      `https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoID}`;
+    // TikTok web API (THIS works for disabled downloads)
+    const api =
+      `https://www.tiktok.com/api/item/detail/?itemId=${videoID}`;
 
-    const response = await fetch(apiUrl, {
+    const response = await fetch(api, {
       headers: {
         "User-Agent":
-          "com.ss.android.ugc.trill/494+ (Linux; U; Android 10)"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
       }
     });
 
     const json = await response.json();
 
-    if (!json.aweme_list || json.aweme_list.length === 0) {
-      return res.json({
-        status: false,
-        message: "Video not found"
-      });
-    }
-
-    const video = json.aweme_list[0];
+    const item = json.itemInfo.itemStruct;
 
     const videoUrl =
-      video.video.play_addr.url_list[0];
+      item.video.playAddr;
 
     const audioUrl =
-      video.music.play_url.url_list[0];
+      item.music.playUrl;
 
     const thumbnail =
-      video.video.cover.url_list[0];
+      item.video.cover;
 
     const title =
-      video.desc;
+      item.desc;
 
     const author =
-      video.author.nickname;
+      item.author.nickname;
 
     const duration =
-      video.video.duration / 1000;
+      item.video.duration;
 
-    // Get size
-    const head = await fetch(videoUrl, { method: "HEAD" });
+    // Get file size
+    const head = await fetch(videoUrl, {
+      method: "HEAD"
+    });
 
-    const bytes = head.headers.get("content-length");
+    const bytes =
+      head.headers.get("content-length");
 
-    const sizeMB = bytes
-      ? (bytes / 1024 / 1024).toFixed(2)
-      : "Unknown";
+    const sizeMB =
+      bytes
+        ? (bytes / 1024 / 1024).toFixed(2)
+        : "Unknown";
 
     const quality =
-      video.video.ratio === "720p"
-        ? "HD"
-        : "SD";
+      item.video.ratio || "Unknown";
 
     res.json({
       status: true,
