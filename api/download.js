@@ -1,7 +1,5 @@
 export default async function handler(req, res) {
-
   try {
-
     const { url, download } = req.query;
 
     if (!url) {
@@ -11,14 +9,18 @@ export default async function handler(req, res) {
       });
     }
 
-    // Resolve short link
+    // Resolve short URL
     const resolve = await fetch(url, {
-      redirect: "follow"
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)"
+      }
     });
 
     const finalUrl = resolve.url;
 
-    // Extract video ID
+    // Extract Video ID
     const videoID = extractVideoId(finalUrl);
 
     if (!videoID) {
@@ -28,34 +30,69 @@ export default async function handler(req, res) {
       });
     }
 
-    // Fetch TikTok data
+    // Fetch TikTok metadata
     const api =
       `https://www.tiktok.com/api/item/detail/?itemId=${videoID}`;
 
     const response = await fetch(api, {
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
         "Referer": "https://www.tiktok.com/"
       }
     });
 
     const json = await response.json();
 
-    const item = json.itemInfo.itemStruct;
+    const item = json?.itemInfo?.itemStruct;
 
-    const videoUrl = item.video.playAddr;
-    const audioUrl = item.music.playUrl;
+    if (!item) {
+      return res.status(500).json({
+        status: false,
+        message: "Failed to fetch video"
+      });
+    }
 
-    // DOWNLOAD MODE
+    // Get BEST video source (works even if download disabled)
+    const videoUrl =
+      item.video.bitRate?.[0]?.playAddr ||
+      item.video.playAddr ||
+      item.video.downloadAddr ||
+      null;
+
+    if (!videoUrl) {
+      return res.status(500).json({
+        status: false,
+        message: "No playable video found"
+      });
+    }
+
+    const audioUrl =
+      item.music?.playUrl || null;
+
+    const thumbnail =
+      item.video?.cover || null;
+
+    const title =
+      item.desc || "TikTok Video";
+
+    const duration =
+      item.video?.duration || 0;
+
+    // Get file size
+    const sizeMB = await getFileSize(videoUrl);
+
+    const quality =
+      item.video?.ratio || "Unknown";
+
+    // If download requested → download file
     if (download === "true") {
 
       const videoRes = await fetch(videoUrl, {
         headers: {
           "User-Agent":
-            "Mozilla/5.0",
-          "Referer":
-            "https://www.tiktok.com/"
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
+          "Referer": "https://www.tiktok.com/"
         }
       });
 
@@ -72,88 +109,62 @@ export default async function handler(req, res) {
         `attachment; filename="tiktok-${videoID}.mp4"`
       );
 
-      res.send(buffer);
-
-      return;
+      return res.send(buffer);
     }
 
-    // METADATA MODE
-    const sizeMB =
-      await getFileSize(videoUrl);
-
-    const quality =
-      item.video.ratio || "HD";
-
-    res.json({
-
+    // Otherwise return JSON
+    return res.json({
       status: true,
-
       video_url: videoUrl,
-
       audio_url: audioUrl,
-
-      thumbnail: item.video.cover,
-
-      title: item.desc,
-
-      author: item.author.nickname,
-
-      duration: item.video.duration,
-
+      thumbnail: thumbnail,
+      title: title,
+      duration: duration,
       size_mb: sizeMB,
-
       quality: quality
-
     });
 
-  }
-  catch (e) {
-
-    res.status(500).json({
+  } catch (e) {
+    return res.status(500).json({
       status: false,
       message: e.toString()
     });
-
   }
-
 }
 
 
-// Extract ID function (REQUIRED)
+// Extract video ID
 function extractVideoId(url) {
 
+  const regex =
+    /video\/(\d+)/;
+
   const match =
-    url.match(/video\/(\d+)/);
+    url.match(regex);
 
   return match ? match[1] : null;
-
 }
 
 
-// File size function
+// Get file size in MB
 async function getFileSize(url) {
-
   try {
 
-    const head =
-      await fetch(url, {
-        method: "HEAD"
-      });
+    const res = await fetch(url, {
+      method: "HEAD"
+    });
 
     const bytes =
-      head.headers.get(
-        "content-length"
-      );
+      res.headers.get("content-length");
 
-    return bytes
-      ? (bytes / 1024 / 1024).toFixed(2)
-      : "Unknown";
+    if (!bytes) return "Unknown";
 
-  }
-  catch {
+    return (
+      bytes / 1024 / 1024
+    ).toFixed(2);
+
+  } catch {
 
     return "Unknown";
-
   }
-
 }
