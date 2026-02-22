@@ -17,7 +17,7 @@ export default async function handler(req, res) {
 
     const finalUrl = resolve.url;
 
-    // Extract video ID
+    // Extract ID
     const idMatch = finalUrl.match(/video\/(\d+)/);
     if (!idMatch) {
       return res.status(400).json({
@@ -28,8 +28,9 @@ export default async function handler(req, res) {
 
     const videoId = idMatch[1];
 
-    // Call TikTok API
-    const apiUrl = `https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoId}`;
+    // TikTok internal API
+    const apiUrl =
+      `https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoId}`;
 
     const apiRes = await fetch(apiUrl, {
       headers: {
@@ -49,17 +50,50 @@ export default async function handler(req, res) {
     const title = item.desc || "TikTok Post";
 
     // =========================
-    // IMAGE POST
+    // IMAGE DETECTION (ALL FORMATS)
     // =========================
-    if (item.image_post_info) {
 
-      const images = item.image_post_info.images.map(img => ({
-        url: img.display_image.url_list[0],
-        width: img.display_image.width,
-        height: img.display_image.height
+    let images = [];
+
+    // Format 1
+    if (item.image_post_info?.images) {
+      images = item.image_post_info.images.map(img => ({
+        url:
+          img.display_image?.url_list?.slice(-1)[0] ||
+          img.owner_watermark_image?.url_list?.slice(-1)[0],
+        width: img.display_image?.width || 0,
+        height: img.display_image?.height || 0
       }));
+    }
 
-      // DOWNLOAD specific image
+    // Format 2
+    else if (item.images) {
+      images = item.images.map(img => ({
+        url: img.url_list?.slice(-1)[0],
+        width: img.width || 0,
+        height: img.height || 0
+      }));
+    }
+
+    // Format 3 photomode fallback
+    else if (
+      item.video?.cover?.url_list &&
+      item.duration === 0
+    ) {
+      images = item.video.cover.url_list.map(url => ({
+        url,
+        width: 0,
+        height: 0
+      }));
+    }
+
+
+    // =========================
+    // IMAGE RESPONSE
+    // =========================
+
+    if (images.length > 0) {
+
       if (download === "true") {
 
         const i = parseInt(index || "0");
@@ -83,13 +117,13 @@ export default async function handler(req, res) {
         return res.send(Buffer.from(buffer));
       }
 
-      // JSON response for images
       return res.json({
         status: true,
         type: "image",
         title,
         total_images: images.length,
         images,
+        thumbnail: images[0].url,
         author: {
           name: item.author.nickname,
           avatar: item.author.avatar_thumb.url_list[0]
@@ -97,12 +131,14 @@ export default async function handler(req, res) {
       });
     }
 
+
     // =========================
-    // VIDEO POST
+    // VIDEO RESPONSE
     // =========================
 
     const videoUrl =
-      item.video.play_addr.url_list[0].replace("playwm", "play");
+      item.video.play_addr.url_list.slice(-1)[0]
+        .replace("playwm", "play");
 
     if (download === "true") {
 
@@ -122,8 +158,8 @@ export default async function handler(req, res) {
       status: true,
       type: "video",
       title,
-      thumbnail: item.video.cover.url_list[0],
       video_url: videoUrl,
+      thumbnail: item.video.cover.url_list[0],
       audio_url: item.music.play_url.url_list[0],
       author: {
         name: item.author.nickname,
@@ -138,10 +174,12 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
+
     return res.status(500).json({
       status: false,
       message: error.message
     });
+
   }
 }
 
