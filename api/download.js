@@ -1,103 +1,90 @@
 export default async function handler(req, res) {
+
   try {
+
     const { url, download } = req.query;
 
     if (!url) {
-      return res.status(400).json({
+      return res.json({
         status: false,
         message: "No URL provided"
       });
     }
 
-    // Resolve short URL
+    // Resolve shortened URL
     const resolve = await fetch(url, {
       redirect: "follow",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)"
-      }
+      headers: browserHeaders()
     });
 
     const finalUrl = resolve.url;
 
-    // Extract Video ID
     const videoID = extractVideoId(finalUrl);
 
     if (!videoID) {
-      return res.status(400).json({
+      return res.json({
         status: false,
         message: "Invalid TikTok URL"
       });
     }
 
-    // Fetch TikTok metadata
+    // Fetch TikTok API
     const api =
-      `https://www.tiktok.com/api/item/detail/?itemId=${videoID}`;
+      `https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id=${videoID}`;
 
     const response = await fetch(api, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
-        "Referer": "https://www.tiktok.com/"
-      }
+      headers: browserHeaders()
     });
 
     const json = await response.json();
 
-    const item = json?.itemInfo?.itemStruct;
+    const item = json.aweme_list?.[0];
 
     if (!item) {
-      return res.status(500).json({
+      return res.json({
         status: false,
-        message: "Failed to fetch video"
+        message: "Video not found"
       });
     }
 
-    // Get BEST video source (works even if download disabled)
-    const videoUrl =
-      item.video.bitRate?.[0]?.playAddr ||
-      item.video.playAddr ||
-      item.video.downloadAddr ||
-      null;
+    // BEST VIDEO SOURCE (no watermark)
+    let videoUrl =
+      item.video?.bit_rate?.[0]?.play_addr?.url_list?.[0] ||
+      item.video?.play_addr?.url_list?.[0];
 
-    if (!videoUrl) {
-      return res.status(500).json({
-        status: false,
-        message: "No playable video found"
-      });
-    }
+    // Clean watermark params
+    videoUrl = videoUrl.replace("playwm", "play");
 
     const audioUrl =
-      item.music?.playUrl || null;
+      item.music?.play_url?.url_list?.[0];
 
     const thumbnail =
-      item.video?.cover || null;
+      item.video?.cover?.url_list?.[0];
 
     const title =
-      item.desc || "TikTok Video";
+      item.desc;
 
     const duration =
-      item.video?.duration || 0;
+      item.video?.duration;
 
-    // Get file size
-    const sizeMB = await getFileSize(videoUrl);
+    const sizeMB =
+      await getSize(videoUrl);
 
     const quality =
-      item.video?.ratio || "Unknown";
+      item.video?.ratio || "HD";
 
-    // If download requested → download file
+    // Download mode
     if (download === "true") {
 
-      const videoRes = await fetch(videoUrl, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X)",
-          "Referer": "https://www.tiktok.com/"
-        }
-      });
+      const videoRes =
+        await fetch(videoUrl, {
+          headers: browserHeaders()
+        });
 
       const buffer =
-        Buffer.from(await videoRes.arrayBuffer());
+        Buffer.from(
+          await videoRes.arrayBuffer()
+        );
 
       res.setHeader(
         "Content-Type",
@@ -112,7 +99,7 @@ export default async function handler(req, res) {
       return res.send(buffer);
     }
 
-    // Otherwise return JSON
+    // JSON response
     return res.json({
       status: true,
       video_url: videoUrl,
@@ -124,47 +111,75 @@ export default async function handler(req, res) {
       quality: quality
     });
 
-  } catch (e) {
-    return res.status(500).json({
+  }
+  catch (e) {
+
+    return res.json({
       status: false,
       message: e.toString()
     });
+
   }
+
+}
+
+
+// Browser headers (IMPORTANT)
+function browserHeaders() {
+
+  return {
+
+    "User-Agent":
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+
+    "Referer":
+      "https://www.tiktok.com/",
+
+    "Accept":
+      "*/*"
+
+  };
+
 }
 
 
 // Extract video ID
 function extractVideoId(url) {
 
-  const regex =
-    /video\/(\d+)/;
-
   const match =
-    url.match(regex);
+    url.match(/video\/(\d+)/);
 
   return match ? match[1] : null;
+
 }
 
 
-// Get file size in MB
-async function getFileSize(url) {
+// Get size
+async function getSize(url) {
+
   try {
 
-    const res = await fetch(url, {
-      method: "HEAD"
-    });
+    const res =
+      await fetch(url, {
+        method: "HEAD",
+        headers: browserHeaders()
+      });
 
     const bytes =
       res.headers.get("content-length");
 
-    if (!bytes) return "Unknown";
+    if (!bytes)
+      return "Unknown";
 
     return (
       bytes / 1024 / 1024
     ).toFixed(2);
 
-  } catch {
+  }
+  catch {
 
     return "Unknown";
+
   }
+
 }
